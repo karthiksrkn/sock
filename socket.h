@@ -1,5 +1,6 @@
+// Document socket.h
 #include "rsvp_msg.h"
-#include "timer-event.h"
+#include "timer_event.h"
 #include "rsvp_db.h"
 
 #define RSVP_PROTOCOL 46  // RSVP IP Protocol Number

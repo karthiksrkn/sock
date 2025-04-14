@@ -1,0 +1,21 @@
+#!/bin/sh /etc/rc.common
+# rsvpd.init
+
+START=50
+STOP=50
+
+start() {
+    sudo /usr/sbin/rsvpd &
+    echo "RSVP daemon started"
+}
+
+stop() {
+    killall rsvpd
+    echo "RSVP daemon stopped"
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
