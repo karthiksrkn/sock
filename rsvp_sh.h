@@ -18,30 +18,25 @@
  * THE SOFTWARE.
  **/
 
-#include <stdio.h>
-#include <stdarg.h>
-#include <time.h>
-#include "log.h"
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#include<stdint.h>
+#include<arpa/inet.h>
+#include<netinet/in.h>
+#include<time.h>
+#include<pthread.h>
+#include<unistd.h>
+#include<signal.h>
+#include<errno.h>
 
-FILE* log_file = NULL;
-pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Show API functions 
+void get_path_tree_info(char * , size_t );
+void get_resv_tree_info(char * , size_t );
 
-void log_message(const char* format, ...) {
-    pthread_mutex_lock(&log_mutex);
-    if (log_file) {
-        time_t now = time(NULL);
-        struct tm* tm_info = localtime(&now);
+// Config API functions
+int rsvp_add_config(const char * , char * , size_t);
+int rsvp_delete_config(const char * , char * , size_t);
 
-        char time_str[20];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-
-        va_list args;
-        va_start(args, format);
-        fprintf(log_file, "[%s] ", time_str);
-        vfprintf(log_file, format, args);  // Use vflog_message for variadic args
-        fprintf(log_file, "\n");
-        fflush(log_file);  // Ensure immediate write
-        va_end(args);
-    }
-    pthread_mutex_unlock(&log_mutex);
-}
+path_msg* create_path(const char *, char *, size_t);
+int rsvpsh_main();

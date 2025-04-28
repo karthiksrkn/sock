@@ -1,4 +1,23 @@
-// rsvpd.c (replaces socket1.c)
+/*
+ * Copyright (c) 2025, Spanidea. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the “Software”), to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ **/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,19 +30,35 @@
 #include <signal.h>
 #include "socket.h"
 #include "log.h"
-#include "rsvp_db.h"
+#include "rsvp_sh.h"
 
 #define SOCKET_PATH "/tmp/rsvp_socket"
 #define LOG_FILE_PATH "/tmp/rsvpd.log"
+
+struct src_dst_ip *ip = NULL;
+
+extern struct session* path_head;
+extern struct session* resv_head;
+extern db_node *path_tree;
+extern db_node *resv_tree;
+
+extern pthread_mutex_t path_tree_mutex;
+extern pthread_mutex_t resv_tree_mutex;
+extern pthread_mutex_t path_list_mutex;
+extern pthread_mutex_t resv_list_mutex;
+
 int sock = 0;
 int ipc_sock = 0;
 
 void* receive_thread(void* arg) {
     struct sockaddr_in sender_addr;
     socklen_t addr_len = sizeof(sender_addr);
-    char buffer[PACKET_SIZE];
+    char buffer[512];
+    int reached = 0;
+    struct session* temp = NULL;
 
     while (1) {
+        memset(buffer, 0, sizeof(buffer));
         int bytes_received = recvfrom(sock, buffer, sizeof(buffer), 0,
                                       (struct sockaddr*)&sender_addr, &addr_len);
         if (bytes_received < 0) {
@@ -31,34 +66,79 @@ void* receive_thread(void* arg) {
             continue;
         }
         log_message("Received bytes in receive_thread");
-        struct rsvp_header* rsvp = (struct rsvp_header*)buffer;
+        struct rsvp_header* rsvp = (struct rsvp_header*)(buffer + IP);
         char sender_ip[16], receiver_ip[16];
         uint16_t tunnel_id;
 
-        //pthread_mutex_lock(&data_mutex);
         log_message("Mutex locked in receive_thread");
         switch (rsvp->msg_type) {
             case PATH_MSG_TYPE:
-                receive_path_message(sock, buffer, sender_addr);
-                break;
-            case RESV_MSG_TYPE:
+
+                //Receive PATH Message
+                resv_event_handler();
+
+                // get ip from the received path packet
+                log_message(" in path msg type\n");
                 get_ip(buffer, sender_ip, receiver_ip, &tunnel_id);
-                log_message("insert_resv_session");
-                if (resv_head == NULL) {
-                    resv_head = insert_session(resv_head, tunnel_id, sender_ip, receiver_ip, 1);
-                } else {
-                    insert_session(resv_head, tunnel_id, sender_ip, receiver_ip, 1);
+		if((reached = dst_reached(receiver_ip)) == -1) {
+                	log_message(" No route to destiantion %s\n",receiver_ip);
+                        return;
                 }
-                receive_resv_message(sock, buffer, sender_addr);
-                break;
+
+		pthread_mutex_lock(&path_list_mutex);
+                temp = search_session(path_head, tunnel_id);
+                pthread_mutex_unlock(&path_list_mutex);
+		if(temp == NULL) {
+			pthread_mutex_lock(&path_list_mutex);
+	               	path_head = insert_session(path_head, tunnel_id, sender_ip, receiver_ip, reached);
+ 			pthread_mutex_unlock(&path_list_mutex);
+			if(path_head == NULL) {
+				log_message("insert for tunnel %d failed", tunnel_id);
+				return;
+			}
+		}
+		temp = NULL;
+                
+                receive_path_message(sock,buffer,sender_addr);
+               
+		break;
+
+            case RESV_MSG_TYPE:
+
+                // Receive RSVP-TE RESV Message	
+                path_event_handler();
+
+                //get ip from the received resv msg
+                log_message(" in resv msg type\n");
+		/*get_ip(buffer, sender_ip, receiver_ip, &tunnel_id);
+		if((reached = dst_reached(sender_ip)) == -1) {
+	                log_message(" No route to destiantion %s\n",sender_ip);
+                        return;
+                }
+                
+		pthread_mutex_lock(&resv_list_mutex);
+                temp = search_session(resv_head, tunnel_id);
+                if(temp == NULL) {
+                        resv_head = insert_session(resv_head, tunnel_id, sender_ip, receiver_ip, reached);
+			if(resv_head == NULL) {
+				log_message("insert for tunnel %d failed", tunnel_id);
+                               	return;	
+			}
+                }
+		temp = NULL;
+ 	        pthread_mutex_unlock(&resv_list_mutex);
+               	*/ 
+                receive_resv_message(sock,buffer,sender_addr);
+                
+ 		break;
+
             default: {
+
                 char msg[64];
                 snprintf(msg, sizeof(msg), "Unknown RSVP message type: %d", rsvp->msg_type);
                 log_message(msg);
-            }
+	    }
         }
-
-        //pthread_mutex_unlock(&data_mutex);
         log_message("Mutex unlocking in receive_thread");
     }
     return NULL;
@@ -68,7 +148,7 @@ void* ipc_server_thread(void* arg) {
     struct sockaddr_un addr;
     int client_sock;
     char buffer[1024];
-    char response[MAX_OUTPUT_BUFFER];
+    char response[4096];
 
     ipc_sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (ipc_sock < 0) {
@@ -130,12 +210,11 @@ void daemonize() {
     pid_t pid = fork();
     if (pid < 0) exit(1);
     if (pid > 0) exit(0); // Parent exits
+    
     setsid();
-    pid = fork();
-    if (pid < 0) exit(1);
-    if (pid > 0) exit(0); // Second parent exits
     umask(0);
     chdir("/");
+
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);

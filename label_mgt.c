@@ -18,30 +18,43 @@
  * THE SOFTWARE.
  **/
 
+#include <stdint.h>
 #include <stdio.h>
-#include <stdarg.h>
-#include <time.h>
-#include "log.h"
 
-FILE* log_file = NULL;
-pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define LABEL_MIN 16
+#define LABEL_MAX 65535
+#define LABEL_COUNT (LABEL_MAX - LABEL_MIN + 1)
+#define BITMAP_WORDS ((LABEL_COUNT + 31) / 32)
 
-void log_message(const char* format, ...) {
-    pthread_mutex_lock(&log_mutex);
-    if (log_file) {
-        time_t now = time(NULL);
-        struct tm* tm_info = localtime(&now);
+static uint32_t label_bitmap[BITMAP_WORDS] = {0};
 
-        char time_str[20];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+// Allocate the first available label
+uint32_t  allocate_label (void) {
+    for (int i = 0; i < LABEL_COUNT; ++i) {
+        uint32_t word_index = i / 32;
+        uint32_t bit_index = i % 32;
 
-        va_list args;
-        va_start(args, format);
-        fprintf(log_file, "[%s] ", time_str);
-        vfprintf(log_file, format, args);  // Use vflog_message for variadic args
-        fprintf(log_file, "\n");
-        fflush(log_file);  // Ensure immediate write
-        va_end(args);
+        if (!(label_bitmap[word_index] & ((uint32_t)1 << bit_index))) {
+            // Mark as allocated
+            label_bitmap[word_index] |= ((uint32_t)1 << bit_index);
+            return LABEL_MIN + i;
+        }
     }
-    pthread_mutex_unlock(&log_mutex);
+    return -1; // No labels available
 }
+
+
+// Free a previously allocated label
+uint8_t free_label (uint32_t label) {
+    if (label < LABEL_MIN || label > LABEL_MAX)
+        return 0;
+
+    uint32_t index = label - LABEL_MIN;
+    uint32_t word_index = index / 32;
+    uint32_t bit_index = index % 32;
+
+    label_bitmap[word_index] &= ~((uint32_t)1 << bit_index);
+    return 1;
+}
+
+
